@@ -1,0 +1,7 @@
+**/bin/
+**/.project
+**/.classpath
+**/.checkstyle
+.settings/
+**/target/
+mqtt_cloud_pubsub_proxy/src/main/java/com/google/cloud/pubsub/proxy/TestMain.java
