@@ -16,7 +16,8 @@
 
 package com.google.cloud.pubsub.proxy;
 
-import com.google.cloud.pubsub.proxy.message.PubSubPublishMessage;
+import com.google.cloud.pubsub.proxy.message.PublishMessage;
+import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
 
 import java.io.IOException;
 
@@ -28,11 +29,34 @@ import java.io.IOException;
 public interface PubSub {
 
   /**
+   * Initializes the pubsub provider with a context that should be used for forwarding
+   * pubsub messages to MQTT subscribers. This method will be invoked once before
+   * using any other methods.
+   *
+   * @param context the context object that can be used for sending MQTT messages to subscribers.
+   *     The context should initialized and ready to send MQTT messages.
+   */
+  void initialize(ProxyContext context);
+
+  /**
    * Publishes a message using the underlying Pub/Sub implementation.
    *
    * @param msg the message to publish.
    * @throws IOException exception is thrown on Pub/Sub API failure.
    */
-  void publish(PubSubPublishMessage msg) throws IOException;
+  void publish(PublishMessage msg) throws IOException;
 
+  /**
+   * Subscribes to the specified topics using the underlying Pub/Sub implementation.
+   *
+   * @param msg the subscription message which contains the topic to subscribe to.
+   * @throws IOException exception is thrown on Pub/Sub API failure.
+   */
+  void subscribe(SubscribeMessage msg) throws IOException;
+
+  /**
+   * Relinquishes the pubsub resources. This method will be invoked when the proxy
+   * no longer requires the pubsub instance.
+   */
+  void destroy();
 }

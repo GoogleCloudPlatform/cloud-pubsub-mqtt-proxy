@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.google.cloud.pubsub.proxy;
+package com.google.cloud.pubsub.proxy.gcloud;
 
 import com.google.api.client.auth.oauth2.Credential;
 import com.google.api.client.http.HttpBackOffIOExceptionHandler;
@@ -75,8 +75,8 @@ public class RetryHttpInitializerWrapper implements HttpRequestInitializer {
       public boolean handleResponse(final HttpRequest request, final HttpResponse response,
           final boolean supportsRetry) throws IOException {
         if (wrappedCredential.handleResponse(request, response, supportsRetry)) {
-          //Back off not needed if credential decides it
-          //can handle it or return code indicates authentication
+          // Back off not needed if credential decides it
+          // can handle it or return code indicates authentication
           return true;
         } else {
           return backoffHandler.handleResponse(request, response, supportsRetry);

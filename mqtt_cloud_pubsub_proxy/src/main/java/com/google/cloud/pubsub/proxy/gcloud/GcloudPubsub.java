@@ -29,20 +29,27 @@ import com.google.api.services.pubsub.Pubsub;
 import com.google.api.services.pubsub.PubsubScopes;
 import com.google.api.services.pubsub.model.PublishRequest;
 import com.google.api.services.pubsub.model.PubsubMessage;
+import com.google.api.services.pubsub.model.Subscription;
 import com.google.api.services.pubsub.model.Topic;
+import com.google.cloud.pubsub.proxy.ProxyContext;
 import com.google.cloud.pubsub.proxy.PubSub;
-import com.google.cloud.pubsub.proxy.RetryHttpInitializerWrapper;
-import com.google.cloud.pubsub.proxy.message.PubSubPublishMessage;
+import com.google.cloud.pubsub.proxy.message.PublishMessage;
+import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.hash.Hashing;
 import com.google.common.io.BaseEncoding;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.net.InetAddress;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.logging.Logger;
 
 /**
@@ -50,22 +57,7 @@ import java.util.logging.Logger;
  */
 public final class GcloudPubsub implements PubSub {
 
-  //Google Cloud Pub/Sub specific constants
-  private static final int TOPIC_NOT_FOUND_STATUS_CODE = 404;
-  private static final int TOPIC_CONFLICT = 409;
-  private static final int MAXIMUM_CPS_TOPIC_LENGTH = 255;
-  private static final int MAX_CPS_PAYLOAD_SIZE_BYTES = (int) (9.5 * 1024 * 1024);
-  private static final String ILLEGAL_TOPIC_PREFIX = "goog";
-  private static final String PREFIX = "cps-";
-  private static final String ASTERISK_URLENCODE_VALUE = "%2A";
-  //TODO - read project name from config file
-  private static final String CLOUD_PUBSUB_PROJECT_NAME = "iot-cloud-pubsub";
-  private static final String BASE_TOPIC = "projects/"
-      + CLOUD_PUBSUB_PROJECT_NAME + "/topics/";
-  private static final Logger logger = Logger.getLogger(GcloudPubsub.class.getName());
-  //Google Cloud Pub/Sub instance
-  private final Pubsub pubsub;
-
+  // Google Cloud Pub/Sub specific constants
   /**
    * MQTT Client Id Attribute Key.
    */
@@ -82,6 +74,29 @@ public final class GcloudPubsub implements PubSub {
    * Retain Message Attribute Key.
    */
   public static final String MQTT_RETAIN = "mqtt_retain";
+  /**
+   * Deadline(in seconds) for acknowledging pubsub messages.
+   */
+  public static final Integer SUBSCRIPTION_ACK_DEADLINE = 600;
+  private static final int TOPIC_NOT_FOUND_STATUS_CODE = 404;
+  private static final int RESOURCE_CONFLICT = 409;
+  private static final int MAXIMUM_CPS_TOPIC_LENGTH = 255;
+  private static final int MAX_CPS_PAYLOAD_SIZE_BYTES = (int) (9.5 * 1024 * 1024);
+  private static final int THREADS = Runtime.getRuntime().availableProcessors();
+  private static final String HASH_PREFIX = "sha256-";
+  private static final String PREFIX = "cps-";
+  private static final String ASTERISK_URLENCODE_VALUE = "%2A";
+  // TODO - read project name from config file
+  private static final String CLOUD_PUBSUB_PROJECT_NAME = "iot-cloud-pubsub";
+  private static final String BASE_TOPIC = "projects/"
+      + CLOUD_PUBSUB_PROJECT_NAME + "/topics/";
+  private static final String BASE_SUBSCRIPTION = "projects/"
+      + CLOUD_PUBSUB_PROJECT_NAME + "/subscriptions/";
+  private static final Logger logger = Logger.getLogger(GcloudPubsub.class.getName());
+  private final ScheduledExecutorService taskExecutor = Executors.newScheduledThreadPool(THREADS);
+  // Google Cloud Pub/Sub instance
+  private final Pubsub pubsub;
+  private ProxyContext context;
 
   /**
    * Constructor that will automatically instantiate a Google Cloud Pub/Sub instance.
@@ -108,7 +123,12 @@ public final class GcloudPubsub implements PubSub {
    * @param pubsub the Google Cloud Pub/Sub instance to use for Pub/Sub operations.
    */
   public GcloudPubsub(Pubsub pubsub) {
-    this.pubsub = pubsub;
+    this.pubsub = checkNotNull(pubsub);
+  }
+
+  @Override
+  public void initialize(ProxyContext context) {
+    this.context = checkNotNull(context);
   }
 
   /**
@@ -120,18 +140,18 @@ public final class GcloudPubsub implements PubSub {
    * @throws IOException is thrown on Google Cloud Pub/Sub publish(or createTopic) API failure.
    */
   @Override
-  public void publish(PubSubPublishMessage msg) throws IOException {
-    String publishTopic = createFullGcloudPubsubTopic(getPubSubTopic(msg.getMqttTopic()));
+  public void publish(PublishMessage msg) throws IOException {
+    String publishTopic = createFullGcloudPubsubTopic(createPubSubTopic(msg.getMqttTopic()));
     PubsubMessage pubsubMessage = new PubsubMessage();
-    byte[] payload = createGcloudPubsubPayload(msg.getMqttPaylaod());
+    byte[] payload = convertMqttPayloadToGcloudPayload(msg.getMqttPaylaod());
     pubsubMessage.setData(new String(payload));
-    //create attributes for the message
+    // create attributes for the message
     Map<String, String> attributes = ImmutableMap.of(MQTT_CLIENT_ID, msg.getMqttClientId(),
         MQTT_TOPIC_NAME, msg.getMqttTopic(),
         MQTT_MESSAGE_ID, msg.getMqttMessageId().toString(),
         MQTT_RETAIN, msg.isMqttMessageRetained().toString());
     pubsubMessage.setAttributes(attributes);
-    //publish message
+    // publish message
     List<PubsubMessage> messages = ImmutableList.of(pubsubMessage);
     PublishRequest publishRequest = new PublishRequest().setMessages(messages);
     try {
@@ -141,9 +161,66 @@ public final class GcloudPubsub implements PubSub {
         logger.info("Cloud PubSub Topic Not Found");
         createTopic(publishTopic);
         pubsub.projects().topics().publish(publishTopic, publishRequest).execute();
+      } else {
+        // re-throw the exception so that we do not send a PUBACK
+        throw e;
       }
     }
     logger.info("Google Cloud Pub/Sub publish SUCCESS for topic " + publishTopic);
+  }
+
+  /**
+   * Subscribes for a topic through Google Cloud PubSub
+   *
+   * @param msg a message that contains information about the topic to subscribe to.
+   * @throws IOException is thrown on Google Cloud Pub/Sub subscribe(or createTopic) API failure.
+   */
+  @Override
+  public void subscribe(SubscribeMessage msg) throws IOException {
+    String mqttTopic = msg.getMqttTopic();
+    // TODO support wildcard subscriptions
+    String cpsSubscriptionName = createFullGcloudPubsubSubscription(
+        createSubcriptionName(mqttTopic));
+    String cpsSubscriptionTopic = createFullGcloudPubsubTopic(createPubSubTopic(mqttTopic));
+    Subscription subscription = new Subscription()
+        .setTopic(cpsSubscriptionTopic) // the name of the topic
+        .setAckDeadlineSeconds(SUBSCRIPTION_ACK_DEADLINE); // acknowledgement deadline in seconds
+    subscribe(subscription, cpsSubscriptionName, cpsSubscriptionTopic);
+    logger.info("Cloud PubSub subscribe SUCCESS for topic " + cpsSubscriptionTopic);
+
+    GcloudPullMessageTask pullTask = new GcloudPullMessageTask.GcloudPullMessageTaskBuilder()
+        .withMqttSender(context)
+        .withPubsub(pubsub)
+        .withPubsubExecutor(taskExecutor)
+        .withSubscriptionName(cpsSubscriptionName)
+        .build();
+    taskExecutor.submit(pullTask);
+    logger.info("Cloud PubSub pulling messages for: " + cpsSubscriptionName);
+  }
+
+  private void subscribe(Subscription subscription, String cpsSubscriptionName,
+      String cpsSubscriptionTopic) throws IOException {
+    try {
+      pubsub.projects().subscriptions().create(cpsSubscriptionName, subscription).execute();
+    } catch (GoogleJsonResponseException e) {
+      logger.info("Pubsub Subscribe Error code: " + e.getStatusCode() + "\n" + e.getMessage());
+      if (e.getStatusCode() == RESOURCE_CONFLICT) {
+        // there is already a subscription and a pull request for this topic.
+        // do nothing and return.
+        // TODO this condition could change based on the implementation of UNSUBSCRIBE
+        logger.info("Cloud PubSub subscription already exists");
+      } else if (e.getStatusCode() == TOPIC_NOT_FOUND_STATUS_CODE) {
+        logger.info("Cloud PubSub Topic Not Found");
+        createTopic(cpsSubscriptionTopic);
+        // possible that subscription name already exists, and might throw an exception.
+        // But, we should not treat that as an error.
+        subscribe(subscription, cpsSubscriptionName, cpsSubscriptionTopic);
+      } else {
+        // exception was caused due to some other reason, so we re-throw and do not send a SUBACK.
+        // client will re-send the subscription.
+        throw e;
+      }
+    }
   }
 
   /**
@@ -153,37 +230,62 @@ public final class GcloudPubsub implements PubSub {
    * @param mqttTopic the MQTT topic name.
    * @return the Google Cloud Pub/Sub topic name.
    */
-  private String getPubSubTopic(String mqttTopic) {
-    // TODO Auto-generated method stub
-    //Google Cloud Pub/Sub resource name requirements can be found at
-    //https://cloud.google.com/pubsub/overview
-    //ensure topic name meets minimum length requirement for CPS
-    String topic = PREFIX + mqttTopic;
-    //URLEncode to support using special characters in the topic name
+  private String createPubSubTopic(String mqttTopic) {
+    // Google Cloud Pub/Sub resource name requirements can be found at https://cloud.google.com/pubsub/overview
+    // Adding a prefix to ensure topic name meets minimum length requirement and prevents the
+    // topic name from starting with "goog"
+    String topic = PREFIX + getEncodedTopicName(mqttTopic);
+    // URLEncode to support using special characters in the topic name
+    // hash the topic name(sha256 -- 64 character hash) if it exceeds the max length
+    if (topic.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
+      topic = HASH_PREFIX + getHashedName(topic);
+    }
+    return topic;
+  }
+
+  /**
+   * Return the qualified Google Cloud Pub/Sub subscription name for the given MQTT topic.
+   *
+   * @param mqttTopic the mqtt topic name for this subscription.
+   * @return the Google Cloud Pub/Sub subscription name that will be used for this topic.
+   */
+  private String createSubcriptionName(String mqttTopic) {
+    // create subscription name using the format: PREFIX+servername+CP/S-topic-equivalent
+    String subscriptionName;
+    try {
+      subscriptionName = PREFIX + InetAddress.getLocalHost().getCanonicalHostName()
+          + getEncodedTopicName(mqttTopic);
+    } catch (UnknownHostException e) {
+      throw new IllegalStateException("Unable to retrieve the hostname of the system");
+    }
+    // if the subscription name exceeds the max length required by pubsub, hash the name
+    if (subscriptionName.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
+      subscriptionName = HASH_PREFIX + getHashedName(subscriptionName);
+    }
+    return subscriptionName;
+  }
+
+  private String getEncodedTopicName(String topic) {
     try {
       topic = URLEncoder.encode(topic, StandardCharsets.UTF_8.name());
     } catch (UnsupportedEncodingException e) {
-      // TODO Auto-generated catch block
       throw new IllegalStateException("Unable to URL encode the mqtt topic name using "
           + StandardCharsets.UTF_8.name());
     }
     topic = topic.replace("*", ASTERISK_URLENCODE_VALUE);
-    //ensure encoded topic name doesn't exceed max cps topic length
-    //encoding will not replace "goog" if the topic starts with it.
-    //So, checking after encoding is safe.
-    checkArgument(!topic.startsWith(ILLEGAL_TOPIC_PREFIX), "Topic names cannot start with \"%s\"",
-        ILLEGAL_TOPIC_PREFIX);
-    //TODO(rshanky) Support topic names longer than MAX CPS Topic size
-    checkArgument(topic.length() <= MAXIMUM_CPS_TOPIC_LENGTH, "The provided topic is too long."
-        + " Please use a topic name that is less than %s characters.", MAXIMUM_CPS_TOPIC_LENGTH);
     return topic;
   }
 
-  private byte[] createGcloudPubsubPayload(byte[] payload) {
+  private String getHashedName(String topic) {
+    topic = Hashing.sha256().hashString(topic, StandardCharsets.UTF_8).toString();
+    return topic;
+  }
+
+  private byte[] convertMqttPayloadToGcloudPayload(byte[] payload) {
     byte[] encodedPayload = BaseEncoding.base64().encode(payload).getBytes();
-    //TODO(rshanky) Support sizes bigger than Cloud PubSub max payload size
-    //MQTT protocol does not support PUBLISH Failure responses, so we cannot inform
-    //client of failure
+    // TODO(rshanky) Support sizes bigger than Cloud PubSub max payload size
+    // MQTT protocol does not support PUBLISH Failure responses, so we cannot inform
+    // client of failure
     checkArgument(encodedPayload.length <= MAX_CPS_PAYLOAD_SIZE_BYTES,
         "Payload size exceeds maximum size of %s bytes", MAX_CPS_PAYLOAD_SIZE_BYTES);
     return encodedPayload;
@@ -193,22 +295,31 @@ public final class GcloudPubsub implements PubSub {
     return BASE_TOPIC + topic;
   }
 
+  private String createFullGcloudPubsubSubscription(String subscriptionName) {
+    return BASE_SUBSCRIPTION + subscriptionName;
+  }
+
   private void createTopic(final String topic) throws IOException {
     try {
       pubsub.projects().topics().create(topic, new Topic()).execute();
     } catch (GoogleJsonResponseException e) {
-      //two threads were trying to create topic at the same time
-      //first thread created a topic, causing second thread to wait(this method is synchronized)
-      //second thread causes an exception since it tries to create an existing topic
-      if (e.getStatusCode() == TOPIC_CONFLICT) {
+      // two threads were trying to create topic at the same time
+      // first thread created a topic, causing second thread to wait(this method is synchronized)
+      // second thread causes an exception since it tries to create an existing topic
+      if (e.getStatusCode() == RESOURCE_CONFLICT) {
         logger.info("Topic was created by another thread");
         return ;
       }
-      //if it is not a topic conflict(or topic already exists) error,
-      //it must be a low level error, and the client should send the PUBLISH packet again for retry
-      //we throw the exception, so that we don't send a PUBACK to the client
+      // if it is not a topic conflict(or topic already exists) error,
+      // it must be a low level error, and the client should send the PUBLISH packet again for retry
+      // we throw the exception, so that we don't send a PUBACK to the client
       throw e;
     }
     logger.info("Google Cloud Pub/Sub Topic Created");
+  }
+
+  @Override
+  public void destroy() {
+   // TODO close pubsub resources
   }
 }

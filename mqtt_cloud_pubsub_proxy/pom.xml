@@ -26,6 +26,10 @@
   </organization>
   <repositories>
     <repository>
+        <id>Eclipse Paho Repo</id>
+        <url>https://repo.eclipse.org/content/repositories/paho-releases/</url>
+    </repository>
+    <repository>
       <id>bintray</id>
       <url>http://dl.bintray.com/andsel/maven/</url>
       <releases>
@@ -37,6 +41,11 @@
     </repository>
   </repositories>
   <dependencies>
+    <dependency>
+        <groupId>org.eclipse.paho</groupId>
+        <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+        <version>1.0.2</version>
+    </dependency>
     <dependency>
       <groupId>org.eclipse.moquette</groupId>
       <artifactId>moquette-broker</artifactId>
