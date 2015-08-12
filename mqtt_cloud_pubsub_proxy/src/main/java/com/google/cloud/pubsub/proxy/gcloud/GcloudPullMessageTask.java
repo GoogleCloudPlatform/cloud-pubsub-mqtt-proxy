@@ -3,6 +3,7 @@ package com.google.cloud.pubsub.proxy.gcloud;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.api.services.pubsub.Pubsub;
+import com.google.api.services.pubsub.model.AcknowledgeRequest;
 import com.google.api.services.pubsub.model.PullRequest;
 import com.google.api.services.pubsub.model.ReceivedMessage;
 import com.google.cloud.pubsub.proxy.ProxyContext;
@@ -10,6 +11,8 @@ import com.google.cloud.pubsub.proxy.message.PublishMessage;
 import com.google.common.io.BaseEncoding;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -174,6 +177,38 @@ final class GcloudPullMessageTask implements Callable<Void> {
     PullRequest request = new PullRequest().setReturnImmediately(true).setMaxMessages(BATCH_SIZE);
     List<ReceivedMessage> msgs = pubsub.projects().subscriptions().pull(subscriptionName, request)
         .execute().getReceivedMessages();
-    return msgs;
+    if (msgs == null) {
+      return null;
+    }
+    // separate received messages into those that were published to pubsub from localhost
+    // and those published from other servers
+    List<ReceivedMessage> nonLocalMsgs = new LinkedList<ReceivedMessage>();
+    List<String> localMessageAckIds = new LinkedList<>();
+    for (ReceivedMessage msg : msgs) {
+      String msgServerId = msg.getMessage().getAttributes().get(GcloudPubsub.PROXY_SERVER_ID);
+      String serverId = InetAddress.getLocalHost().getCanonicalHostName();
+      if (msgServerId.equals(serverId)) {
+        logger.info("Discarding Pubsub message -- Message was published to pubsub from localhost");
+        localMessageAckIds.add(msg.getAckId());
+      } else {
+        nonLocalMsgs.add(msg);
+      }
+    }
+    if (!localMessageAckIds.isEmpty()) {
+      ackPubsubMessage(localMessageAckIds);
+    }
+    return nonLocalMsgs;
+  }
+
+  private void ackPubsubMessage(List<String> ackIds) {
+    AcknowledgeRequest ackRequest = new AcknowledgeRequest().setAckIds(ackIds);
+    try {
+      pubsub.projects().subscriptions().acknowledge(subscriptionName, ackRequest).execute();
+      logger.info("Successfully Acked Pubsub message");
+    } catch (IOException e) {
+      // we are unable to ack the message and it will get re-delivered(as a duplicate message).
+      // since, we are only supporting QOS 1 for MQTT this is fine.
+      logger.info("Unable to Ack Pubsub message");
+    }
   }
 }

@@ -115,6 +115,7 @@ public class NettyAcceptor implements ServerAcceptor {
 
   private static final Logger LOG = LoggerFactory.getLogger(NettyAcceptor.class);
   private final PubSub pubsub;
+  private final MoquetteProxyContext context;
 
   EventLoopGroup bossGroup;
   EventLoopGroup workerGroup;
@@ -128,6 +129,7 @@ public class NettyAcceptor implements ServerAcceptor {
    */
   public NettyAcceptor() throws IOException {
     pubsub = new GcloudPubsub();
+    context = new MoquetteProxyContext();
   }
 
   /**
@@ -152,7 +154,9 @@ public class NettyAcceptor implements ServerAcceptor {
       initializeSslTcpTransport(messaging, props, sslHandler);
       initializeWssTransport(messaging, props, sslHandler);
     }
-    //TODO initialize ProxyContext and Pubsub impl here
+    // initialize ProxyContext and Pubsub impl
+    context.open();
+    pubsub.initialize(context);
   }
 
   private void initFactory(String host, int port, final PipelineInitializer pipeliner) {
@@ -318,6 +322,7 @@ public class NettyAcceptor implements ServerAcceptor {
   /**
    * Terminates and shutdown the server resources gracefully.
    */
+  @Override
   public void close() {
     if (workerGroup == null) {
       throw new IllegalStateException("Invoked close on an Acceptor that wasn't initialized");
@@ -334,8 +339,14 @@ public class NettyAcceptor implements ServerAcceptor {
     BytesMetrics bytesMetrics = bytesMetricsCollector.computeMetrics();
     LOG.info(String.format("Bytes read: %d, bytes wrote: %d",
         bytesMetrics.readBytes(), bytesMetrics.wroteBytes()));
-
-    //TODO close ProxyContext and Pubsub
+    // close pubsub and context resources
+    try {
+      context.close();
+    } catch (IOException e) {
+      // IOException is only thrown when the context has already been closed.
+      LOG.info("Unable to close Proxy Context. It has already been closed");
+    }
+    pubsub.destroy();
   }
 
 

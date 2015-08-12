@@ -23,15 +23,22 @@ import static org.eclipse.moquette.proto.messages.AbstractMessage.SUBSCRIBE;
 import static org.eclipse.moquette.proto.messages.AbstractMessage.UNSUBSCRIBE;
 
 import com.google.cloud.pubsub.proxy.PubSub;
+import com.google.cloud.pubsub.proxy.message.PublishMessage;
+import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
 
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
 import org.eclipse.moquette.proto.messages.AbstractMessage;
+import org.eclipse.moquette.proto.messages.SubscribeMessage.Couple;
+import org.eclipse.moquette.server.netty.NettyChannel;
 import org.eclipse.moquette.server.netty.NettyMQTTHandler;
+import org.eclipse.moquette.server.netty.NettyUtils;
 import org.eclipse.moquette.spi.IMessaging;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.logging.Logger;
 
 /**
@@ -62,27 +69,58 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
 
   @Override
   public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-    //process the mqtt message using Pubsub provider
+    // process the mqtt message using Pubsub provider
     AbstractMessage mqttMsg = (AbstractMessage) msg;
+    String clientId = (String) NettyUtils.getAttribute(ctx, NettyChannel.ATTR_KEY_CLIENTID);
+    // performing cloud pub/sub operations before mqtt operation,
+    // so that we can use the SUBACK and PUBACK protocol
+    // if cloud pub/sub procedures fail, we will not send an ACK,
+    // and the MQTT control packet gets resent
     try {
       switch (mqttMsg.getMessageType()) {
         case PUBLISH:
-          //TODO add Pubsub code for publishing message to Pubsub
+          logger.info("Processing MQTT Publish Control Packet");
+          handlePublishMessage(mqttMsg, clientId);
           break;
         case SUBSCRIBE:
-          //TODO add Pubsub code for subscribing
+          logger.info("Processing MQTT Subscribe Control Packet");
+          handleSubscribeMessage(mqttMsg, clientId);
+          break;
         case UNSUBSCRIBE:
-          //TODO add Pubsub code for unsubscribing
+          // TODO add Pubsub code for unsubscribing
         default:
           break;
       }
-      //process the mqtt message using the original Moquette mqtt handler
+      // process the mqtt message using the original Moquette mqtt handler
       mqttHandler.channelRead(ctx, msg);
     } catch (Exception e) {
-      //the pubsub provider failed to properly process the message
-      //or the mqtt handler failed. The message will be resent and processed again.
+      // the pubsub provider failed to properly process the message
+      // or the mqtt handler failed. The message will be resent and processed again.
       logger.info("An error occured while attempting to process the MQTT message.\n"
           + e.getMessage());
+    }
+  }
+
+  private void handlePublishMessage(AbstractMessage mqttMsg, String clientId) throws IOException {
+    org.eclipse.moquette.proto.messages.PublishMessage mqttPublishMsg =
+        (org.eclipse.moquette.proto.messages.PublishMessage) mqttMsg;
+    PublishMessage pubsubPublishMsg = new PublishMessage.PublishMessageBuilder()
+        .withClientId(clientId)
+        .withRetain(mqttMsg.isRetainFlag())
+        .withMessageId(mqttPublishMsg.getMessageID())
+        .withPayload(mqttPublishMsg.getPayload().array())
+        .withTopic(mqttPublishMsg.getTopicName())
+        .build();
+    pubsub.publish(pubsubPublishMsg);
+  }
+
+  private void handleSubscribeMessage(AbstractMessage mqttMsg, String clientId) throws IOException {
+    org.eclipse.moquette.proto.messages.SubscribeMessage mqttSubscribeMsg =
+        (org.eclipse.moquette.proto.messages.SubscribeMessage) mqttMsg;
+    List<Couple> mqttSubscriptions = mqttSubscribeMsg.subscriptions();
+    for (Couple mqttSubscription : mqttSubscriptions) {
+      String topic = mqttSubscription.getTopicFilter();
+      pubsub.subscribe(new SubscribeMessage(topic, clientId));
     }
   }
 
