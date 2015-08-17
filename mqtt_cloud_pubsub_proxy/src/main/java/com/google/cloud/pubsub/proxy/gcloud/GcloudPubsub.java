@@ -46,8 +46,12 @@ import java.net.InetAddress;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.logging.Logger;
@@ -78,6 +82,10 @@ public final class GcloudPubsub implements PubSub {
    * Deadline(in seconds) for acknowledging pubsub messages.
    */
   public static final Integer SUBSCRIPTION_ACK_DEADLINE = 600;
+  /**
+   * Server Id Attribute Key.
+   */
+  public static final String PROXY_SERVER_ID = "proxy_server_id";
   private static final int TOPIC_NOT_FOUND_STATUS_CODE = 404;
   private static final int RESOURCE_CONFLICT = 409;
   private static final int MAXIMUM_CPS_TOPIC_LENGTH = 255;
@@ -94,9 +102,10 @@ public final class GcloudPubsub implements PubSub {
       + CLOUD_PUBSUB_PROJECT_NAME + "/subscriptions/";
   private static final Logger logger = Logger.getLogger(GcloudPubsub.class.getName());
   private final ScheduledExecutorService taskExecutor = Executors.newScheduledThreadPool(THREADS);
-  // Google Cloud Pub/Sub instance
-  private final Pubsub pubsub;
+  private Pubsub pubsub; // Google Cloud Pub/Sub instance
   private ProxyContext context;
+  private Map<String, Map<String, Set<String>>> clientIdSubscriptionMap = new HashMap<>();
+  private Map<String, List<String>> cpsSubscriptionMap = new HashMap<>();
 
   /**
    * Constructor that will automatically instantiate a Google Cloud Pub/Sub instance.
@@ -149,7 +158,8 @@ public final class GcloudPubsub implements PubSub {
     Map<String, String> attributes = ImmutableMap.of(MQTT_CLIENT_ID, msg.getMqttClientId(),
         MQTT_TOPIC_NAME, msg.getMqttTopic(),
         MQTT_MESSAGE_ID, msg.getMqttMessageId().toString(),
-        MQTT_RETAIN, msg.isMqttMessageRetained().toString());
+        MQTT_RETAIN, msg.isMqttMessageRetained().toString(),
+        PROXY_SERVER_ID, InetAddress.getLocalHost().getCanonicalHostName());
     pubsubMessage.setAttributes(attributes);
     // publish message
     List<PubsubMessage> messages = ImmutableList.of(pubsubMessage);
@@ -178,24 +188,13 @@ public final class GcloudPubsub implements PubSub {
   @Override
   public void subscribe(SubscribeMessage msg) throws IOException {
     String mqttTopic = msg.getMqttTopic();
+    String clientId = msg.getClientId();
     // TODO support wildcard subscriptions
     String cpsSubscriptionName = createFullGcloudPubsubSubscription(
         createSubcriptionName(mqttTopic));
     String cpsSubscriptionTopic = createFullGcloudPubsubTopic(createPubSubTopic(mqttTopic));
-    Subscription subscription = new Subscription()
-        .setTopic(cpsSubscriptionTopic) // the name of the topic
-        .setAckDeadlineSeconds(SUBSCRIPTION_ACK_DEADLINE); // acknowledgement deadline in seconds
-    subscribe(subscription, cpsSubscriptionName, cpsSubscriptionTopic);
+    updateSubscriptionMaps(clientId, mqttTopic, cpsSubscriptionName, cpsSubscriptionTopic);
     logger.info("Cloud PubSub subscribe SUCCESS for topic " + cpsSubscriptionTopic);
-
-    GcloudPullMessageTask pullTask = new GcloudPullMessageTask.GcloudPullMessageTaskBuilder()
-        .withMqttSender(context)
-        .withPubsub(pubsub)
-        .withPubsubExecutor(taskExecutor)
-        .withSubscriptionName(cpsSubscriptionName)
-        .build();
-    taskExecutor.submit(pullTask);
-    logger.info("Cloud PubSub pulling messages for: " + cpsSubscriptionName);
   }
 
   private void subscribe(Subscription subscription, String cpsSubscriptionName,
@@ -220,6 +219,68 @@ public final class GcloudPubsub implements PubSub {
         // client will re-send the subscription.
         throw e;
       }
+    }
+  }
+
+  // method for updating the map of subscriptions per client Id.
+  private void addEntryToClientIdSubscriptionMap(String clientId, String mqttTopic,
+      String cpsTopic) {
+    Map<String, Set<String>> mqttTopicMap = clientIdSubscriptionMap.get(clientId);
+    // create a new map for the very first subscription for a client id
+    if (mqttTopicMap == null) {
+      mqttTopicMap = new HashMap<>();
+      clientIdSubscriptionMap.put(clientId, mqttTopicMap);
+      logger.info("First subscription for Client Id: " + clientId);
+    }
+    // update the list of cps topics for an mqtt topic
+    Set<String> cpsTopics = mqttTopicMap.get(mqttTopic);
+    if (cpsTopics == null) {
+      cpsTopics = new HashSet<>();
+      mqttTopicMap.put(mqttTopic, cpsTopics);
+    }
+    cpsTopics.add(cpsTopic);
+  }
+
+  // update cps subscription map
+  private void addEntryToCpsSubscriptionMap(String clientId, String cpsTopic,
+      String cpsSubscriptionName) {
+    List<String> clientIds = cpsSubscriptionMap.get(cpsTopic);
+    if (clientIds == null) {
+      clientIds = new LinkedList<>();
+      cpsSubscriptionMap.put(cpsTopic, clientIds);
+    }
+    clientIds.add(clientId);
+  }
+
+  // synchronized method for updating the subscription maps
+  // conditionally creates a pubsub subscription and pull task,
+  // if there are no other pull tasks for the pubsub topic
+  private synchronized void updateSubscriptionMaps(String clientId, String mqttTopic,
+      String cpsSubscriptionName, String cpsTopic) throws IOException {
+    List<String> clientIds = cpsSubscriptionMap.get(cpsTopic);
+    if (clientIds == null) {
+      // create pubsub subscription
+      Subscription subscription = new Subscription()
+          .setTopic(cpsTopic) // the name of the topic
+          .setAckDeadlineSeconds(SUBSCRIPTION_ACK_DEADLINE); // acknowledgement deadline in seconds
+      subscribe(subscription, cpsSubscriptionName, cpsTopic);
+      // update subscription maps
+      addEntryToClientIdSubscriptionMap(clientId, mqttTopic, cpsTopic);
+      addEntryToCpsSubscriptionMap(clientId, cpsTopic, cpsSubscriptionName);
+      // schedule pull task for the very first time we have a client Id subscribe to a pubsub topic
+      // task must be started after subscription maps are updated
+      GcloudPullMessageTask pullTask = new GcloudPullMessageTask.GcloudPullMessageTaskBuilder()
+          .withMqttSender(context)
+          .withPubsub(pubsub)
+          .withPubsubExecutor(taskExecutor)
+          .withSubscriptionName(cpsSubscriptionName)
+          .build();
+      taskExecutor.submit(pullTask);
+      logger.info("Created Cloud PubSub pulling task for: " + cpsSubscriptionName);
+    } else {
+      // update subscription maps
+      addEntryToClientIdSubscriptionMap(clientId, mqttTopic, cpsTopic);
+      addEntryToCpsSubscriptionMap(clientId, cpsTopic, cpsSubscriptionName);
     }
   }
 
@@ -320,6 +381,9 @@ public final class GcloudPubsub implements PubSub {
 
   @Override
   public void destroy() {
-   // TODO close pubsub resources
+    pubsub = null;
+    taskExecutor.shutdown();
+    clientIdSubscriptionMap = null;
+    cpsSubscriptionMap = null;
   }
 }
