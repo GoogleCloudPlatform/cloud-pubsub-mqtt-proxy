@@ -32,6 +32,7 @@ final class GcloudPullMessageTask implements Callable<Void> {
   private static int MAX_PULL_DELAY = 10 * 60; // 10 minutes
   private static final Logger logger = Logger.getLogger(GcloudPullMessageTask.class.getName());
   // task members
+  private final GcloudPubsub gcloud;
   private final Pubsub pubsub;
   private final String subscriptionName;
   private final ProxyContext mqttSender;
@@ -40,6 +41,7 @@ final class GcloudPullMessageTask implements Callable<Void> {
 
   private GcloudPullMessageTask(GcloudPullMessageTaskBuilder builder) {
     this.pubsub = checkNotNull(builder.pubsub);
+    this.gcloud = checkNotNull(builder.gcloud);
     this.subscriptionName = checkNotNull(builder.subscriptionName);
     this.pubsubExecutor = checkNotNull(builder.pubsubExecutor);
     this.delayTime = builder.delayTime;
@@ -52,6 +54,7 @@ final class GcloudPullMessageTask implements Callable<Void> {
   static final class GcloudPullMessageTaskBuilder {
 
     private Pubsub pubsub;
+    private GcloudPubsub gcloud;
     private String subscriptionName;
     private ProxyContext context;
     private ScheduledExecutorService pubsubExecutor;
@@ -59,6 +62,11 @@ final class GcloudPullMessageTask implements Callable<Void> {
 
     public GcloudPullMessageTaskBuilder withPubsub(Pubsub pubsub) {
       this.pubsub = pubsub;
+      return this;
+    }
+
+    public GcloudPullMessageTaskBuilder withGcloud(GcloudPubsub gcloud) {
+      this.gcloud = gcloud;
       return this;
     }
 
@@ -90,12 +98,17 @@ final class GcloudPullMessageTask implements Callable<Void> {
 
   @Override
   public Void call() {
+    if (gcloud.shouldTerminateSubscription(subscriptionName)) {
+      logger.info("Terminating Pull Task for subscription: " + subscriptionName);
+      return null;
+    }
     int pullDelayTime;
     List<ReceivedMessage> msgs = null;
     try {
       msgs = getMessagesFromPubsub(subscriptionName);
     } catch (IOException e) {
       // pubsub API failure, so exponentially backoff(bounded)
+      // if pubsub is failing, we don't try to terminate the tasks
       pullDelayTime = Math.min(Math.max(delayTime, 1) * PUBSUB_RPC_FAILURE_DELAY, MAX_PULL_DELAY);
       GcloudPullMessageTask pullMessageTask = toBuilder()
           .withTaskDelayTime(pullDelayTime)
@@ -118,6 +131,7 @@ final class GcloudPullMessageTask implements Callable<Void> {
       pullDelayTime = ACK_CHECK_DELAY;
     }
     // TODO limit number of messages that are in the process of being acked -- avoid large queues
+    logger.info("Reschedule Task for " + subscriptionName);
     GcloudPullMessageTask pullMessageTask = toBuilder()
         .withTaskDelayTime(pullDelayTime)
         .build();
@@ -155,6 +169,7 @@ final class GcloudPullMessageTask implements Callable<Void> {
 
   private GcloudPullMessageTaskBuilder toBuilder() {
     return new GcloudPullMessageTask.GcloudPullMessageTaskBuilder()
+        .withGcloud(gcloud)
         .withMqttSender(mqttSender)
         .withPubsub(pubsub)
         .withPubsubExecutor(pubsubExecutor)

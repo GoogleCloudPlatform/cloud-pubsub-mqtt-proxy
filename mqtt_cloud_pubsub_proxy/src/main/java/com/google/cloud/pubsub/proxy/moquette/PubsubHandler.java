@@ -25,6 +25,7 @@ import static org.eclipse.moquette.proto.messages.AbstractMessage.UNSUBSCRIBE;
 import com.google.cloud.pubsub.proxy.PubSub;
 import com.google.cloud.pubsub.proxy.message.PublishMessage;
 import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
+import com.google.cloud.pubsub.proxy.message.UnsubscribeMessage;
 
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
@@ -87,7 +88,9 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
           handleSubscribeMessage(mqttMsg, clientId);
           break;
         case UNSUBSCRIBE:
-          // TODO add Pubsub code for unsubscribing
+          logger.info("Processing MQTT Unsubscribe Control Packet");
+          handleUnsubscribeMessage(mqttMsg, clientId);
+          break;
         default:
           break;
       }
@@ -121,6 +124,15 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
     for (Couple mqttSubscription : mqttSubscriptions) {
       String topic = mqttSubscription.getTopicFilter();
       pubsub.subscribe(new SubscribeMessage(topic, clientId));
+    }
+  }
+
+  private void handleUnsubscribeMessage(AbstractMessage mqttMsg, String clientId) {
+    org.eclipse.moquette.proto.messages.UnsubscribeMessage mqttUnsubscribeMsg =
+        (org.eclipse.moquette.proto.messages.UnsubscribeMessage) mqttMsg;
+    List<String> topics = mqttUnsubscribeMsg.topicFilters();
+    for (String topic : topics) {
+      pubsub.unsubscribe(new UnsubscribeMessage(topic, clientId));
     }
   }
 

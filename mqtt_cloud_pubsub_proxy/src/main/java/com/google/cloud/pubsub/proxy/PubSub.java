@@ -18,13 +18,15 @@ package com.google.cloud.pubsub.proxy;
 
 import com.google.cloud.pubsub.proxy.message.PublishMessage;
 import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
+import com.google.cloud.pubsub.proxy.message.UnsubscribeMessage;
 
 import java.io.IOException;
 
 /**
  * An interface that should be implemented by Publish/Subscribe(Pub/Sub) service providers,
  * such as Google Cloud Pub/Sub. The proxy will act as a bridge between MQTT clients and the
- * implementation of this interface.
+ * implementation of this interface. The proxy merely delegates every MQTT client request to
+ * PubSub and it is the responsibility of the implementation to decide how to react.
  */
 public interface PubSub {
 
@@ -48,11 +50,21 @@ public interface PubSub {
 
   /**
    * Subscribes to the specified topics using the underlying Pub/Sub implementation.
+   * Normally the underlying pubsub implementation will only create one subscription per topic.
    *
    * @param msg the subscription message which contains the topic to subscribe to.
    * @throws IOException exception is thrown on Pub/Sub API failure.
    */
   void subscribe(SubscribeMessage msg) throws IOException;
+
+  /**
+   * Unsubscribes from the specified topic using the underlying Pub/Sub implementation.
+   * Normally the underlying Pub/Sub implementation will unsubsribe when there are no
+   * more subscribed clients for the given topic.
+   *
+   * @param msg the message containing the MQTT topic to unsubscribe from.
+   */
+  void unsubscribe(UnsubscribeMessage msg);
 
   /**
    * Relinquishes the pubsub resources. This method will be invoked when the proxy

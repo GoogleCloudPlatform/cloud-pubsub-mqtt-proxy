@@ -35,6 +35,7 @@ import com.google.cloud.pubsub.proxy.ProxyContext;
 import com.google.cloud.pubsub.proxy.PubSub;
 import com.google.cloud.pubsub.proxy.message.PublishMessage;
 import com.google.cloud.pubsub.proxy.message.SubscribeMessage;
+import com.google.cloud.pubsub.proxy.message.UnsubscribeMessage;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.hash.Hashing;
@@ -86,7 +87,7 @@ public final class GcloudPubsub implements PubSub {
    * Server Id Attribute Key.
    */
   public static final String PROXY_SERVER_ID = "proxy_server_id";
-  private static final int TOPIC_NOT_FOUND_STATUS_CODE = 404;
+  private static final int RESOURCE_NOT_FOUND = 404;
   private static final int RESOURCE_CONFLICT = 409;
   private static final int MAXIMUM_CPS_TOPIC_LENGTH = 255;
   private static final int MAX_CPS_PAYLOAD_SIZE_BYTES = (int) (9.5 * 1024 * 1024);
@@ -102,10 +103,18 @@ public final class GcloudPubsub implements PubSub {
       + CLOUD_PUBSUB_PROJECT_NAME + "/subscriptions/";
   private static final Logger logger = Logger.getLogger(GcloudPubsub.class.getName());
   private final ScheduledExecutorService taskExecutor = Executors.newScheduledThreadPool(THREADS);
+  private final String serverName;
   private Pubsub pubsub; // Google Cloud Pub/Sub instance
   private ProxyContext context;
+  /**
+   * Maps client ids to a map of subscribed mqtt topics and their corresponding pubsub topics.
+   */
   private Map<String, Map<String, Set<String>>> clientIdSubscriptionMap = new HashMap<>();
+  /**
+   * Maps pubsub topics to the list of clients that are subscribed to the topic.
+   */
   private Map<String, List<String>> cpsSubscriptionMap = new HashMap<>();
+  private Set<String> activeSubscriptions = new HashSet<>();
 
   /**
    * Constructor that will automatically instantiate a Google Cloud Pub/Sub instance.
@@ -113,6 +122,11 @@ public final class GcloudPubsub implements PubSub {
    * @throws IOException when the initialization of the Google Cloud Pub/Sub client fails.
    */
   public GcloudPubsub() throws IOException {
+    try {
+      serverName = InetAddress.getLocalHost().getCanonicalHostName();
+    } catch (UnknownHostException e) {
+      throw new IllegalStateException("Unable to retrieve the hostname of the system");
+    }
     HttpTransport httpTransport = checkNotNull(Utils.getDefaultTransport());
     JsonFactory jsonFactory = checkNotNull(Utils.getDefaultJsonFactory());
     GoogleCredential credential = GoogleCredential.getApplicationDefault(
@@ -132,6 +146,11 @@ public final class GcloudPubsub implements PubSub {
    * @param pubsub the Google Cloud Pub/Sub instance to use for Pub/Sub operations.
    */
   public GcloudPubsub(Pubsub pubsub) {
+    try {
+      serverName = InetAddress.getLocalHost().getCanonicalHostName();
+    } catch (UnknownHostException e) {
+      throw new IllegalStateException("Unable to retrieve the hostname of the system");
+    }
     this.pubsub = checkNotNull(pubsub);
   }
 
@@ -159,7 +178,7 @@ public final class GcloudPubsub implements PubSub {
         MQTT_TOPIC_NAME, msg.getMqttTopic(),
         MQTT_MESSAGE_ID, msg.getMqttMessageId().toString(),
         MQTT_RETAIN, msg.isMqttMessageRetained().toString(),
-        PROXY_SERVER_ID, InetAddress.getLocalHost().getCanonicalHostName());
+        PROXY_SERVER_ID, serverName);
     pubsubMessage.setAttributes(attributes);
     // publish message
     List<PubsubMessage> messages = ImmutableList.of(pubsubMessage);
@@ -167,7 +186,7 @@ public final class GcloudPubsub implements PubSub {
     try {
       pubsub.projects().topics().publish(publishTopic, publishRequest).execute();
     } catch (GoogleJsonResponseException e) {
-      if (e.getStatusCode() == TOPIC_NOT_FOUND_STATUS_CODE) {
+      if (e.getStatusCode() == RESOURCE_NOT_FOUND) {
         logger.info("Cloud PubSub Topic Not Found");
         createTopic(publishTopic);
         pubsub.projects().topics().publish(publishTopic, publishRequest).execute();
@@ -180,7 +199,8 @@ public final class GcloudPubsub implements PubSub {
   }
 
   /**
-   * Subscribes for a topic through Google Cloud PubSub
+   * Subscribes for a topic through Google Cloud PubSub and updates subscription data structures.
+   * TODO avoid unnecessary synchronization for updating data structures and creating subscriptions.
    *
    * @param msg a message that contains information about the topic to subscribe to.
    * @throws IOException is thrown on Google Cloud Pub/Sub subscribe(or createTopic) API failure.
@@ -190,10 +210,10 @@ public final class GcloudPubsub implements PubSub {
     String mqttTopic = msg.getMqttTopic();
     String clientId = msg.getClientId();
     // TODO support wildcard subscriptions
-    String cpsSubscriptionName = createFullGcloudPubsubSubscription(
-        createSubcriptionName(mqttTopic));
+    String cpsSubscriptionName =
+        createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic));
     String cpsSubscriptionTopic = createFullGcloudPubsubTopic(createPubSubTopic(mqttTopic));
-    updateSubscriptionMaps(clientId, mqttTopic, cpsSubscriptionName, cpsSubscriptionTopic);
+    updateOnSubscribe(clientId, mqttTopic, cpsSubscriptionName, cpsSubscriptionTopic);
     logger.info("Cloud PubSub subscribe SUCCESS for topic " + cpsSubscriptionTopic);
   }
 
@@ -208,7 +228,7 @@ public final class GcloudPubsub implements PubSub {
         // do nothing and return.
         // TODO this condition could change based on the implementation of UNSUBSCRIBE
         logger.info("Cloud PubSub subscription already exists");
-      } else if (e.getStatusCode() == TOPIC_NOT_FOUND_STATUS_CODE) {
+      } else if (e.getStatusCode() == RESOURCE_NOT_FOUND) {
         logger.info("Cloud PubSub Topic Not Found");
         createTopic(cpsSubscriptionTopic);
         // possible that subscription name already exists, and might throw an exception.
@@ -220,6 +240,58 @@ public final class GcloudPubsub implements PubSub {
         throw e;
       }
     }
+  }
+
+  /**
+   * Updates the subscription data structures by removing entries.
+   * TODO avoid any unnecessary synchronization while updating data structures.
+   */
+  @Override
+  public void unsubscribe(UnsubscribeMessage msg) {
+    updateOnUnsubscribe(msg.getClientId(), msg.getMqttTopic());
+  }
+
+  // updates the subscription data structures by removing entries
+  private synchronized void updateOnUnsubscribe(String clientId, String mqttTopic) {
+    Map<String, Set<String>> mqttTopicMap = clientIdSubscriptionMap.get(clientId);
+    if (mqttTopicMap != null) {
+      Set<String> pubsubTopics = mqttTopicMap.remove(mqttTopic);
+      if (pubsubTopics != null) {
+        for (String pubsubTopic : pubsubTopics) {
+          List<String> clientIds = cpsSubscriptionMap.get(pubsubTopic);
+          clientIds.remove(clientId);
+          if (clientIds.isEmpty()) {
+            String subscriptionName =
+                createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic));
+            activeSubscriptions.remove(subscriptionName);
+            cpsSubscriptionMap.remove(pubsubTopic);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * If there are no more client subscriptions for the given pubsub topic,
+   * the subscription gets terminated, and removed from the subscription map.
+   *
+   * @param subscriptionName an identifier for the subscription we are attempting to terminate.
+   * @return true if the subscription has been terminated, and false otherwise.
+   */
+  public synchronized boolean shouldTerminateSubscription(String subscriptionName) {
+    if (!activeSubscriptions.contains(subscriptionName)) {
+      try {
+        pubsub.projects().subscriptions().delete(subscriptionName);
+        return true;
+      } catch (GoogleJsonResponseException e) {
+        if (e.getStatusCode() == RESOURCE_NOT_FOUND) {
+          return true;
+        }
+      } catch (IOException ioe) {
+        // we will return false and the pull task will call this method again when rescheduled.
+      }
+    }
+    return false;
   }
 
   // method for updating the map of subscriptions per client Id.
@@ -255,7 +327,7 @@ public final class GcloudPubsub implements PubSub {
   // synchronized method for updating the subscription maps
   // conditionally creates a pubsub subscription and pull task,
   // if there are no other pull tasks for the pubsub topic
-  private synchronized void updateSubscriptionMaps(String clientId, String mqttTopic,
+  private synchronized void updateOnSubscribe(String clientId, String mqttTopic,
       String cpsSubscriptionName, String cpsTopic) throws IOException {
     List<String> clientIds = cpsSubscriptionMap.get(cpsTopic);
     if (clientIds == null) {
@@ -265,12 +337,14 @@ public final class GcloudPubsub implements PubSub {
           .setAckDeadlineSeconds(SUBSCRIPTION_ACK_DEADLINE); // acknowledgement deadline in seconds
       subscribe(subscription, cpsSubscriptionName, cpsTopic);
       // update subscription maps
+      activeSubscriptions.add(cpsSubscriptionName);
       addEntryToClientIdSubscriptionMap(clientId, mqttTopic, cpsTopic);
       addEntryToCpsSubscriptionMap(clientId, cpsTopic, cpsSubscriptionName);
       // schedule pull task for the very first time we have a client Id subscribe to a pubsub topic
       // task must be started after subscription maps are updated
       GcloudPullMessageTask pullTask = new GcloudPullMessageTask.GcloudPullMessageTaskBuilder()
           .withMqttSender(context)
+          .withGcloud(this)
           .withPubsub(pubsub)
           .withPubsubExecutor(taskExecutor)
           .withSubscriptionName(cpsSubscriptionName)
@@ -312,13 +386,7 @@ public final class GcloudPubsub implements PubSub {
    */
   private String createSubcriptionName(String mqttTopic) {
     // create subscription name using the format: PREFIX+servername+CP/S-topic-equivalent
-    String subscriptionName;
-    try {
-      subscriptionName = PREFIX + InetAddress.getLocalHost().getCanonicalHostName()
-          + getEncodedTopicName(mqttTopic);
-    } catch (UnknownHostException e) {
-      throw new IllegalStateException("Unable to retrieve the hostname of the system");
-    }
+    String subscriptionName = PREFIX + serverName + getEncodedTopicName(mqttTopic);
     // if the subscription name exceeds the max length required by pubsub, hash the name
     if (subscriptionName.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
       subscriptionName = HASH_PREFIX + getHashedName(subscriptionName);
