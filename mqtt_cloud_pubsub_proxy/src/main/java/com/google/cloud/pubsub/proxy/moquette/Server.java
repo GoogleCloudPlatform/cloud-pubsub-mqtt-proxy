@@ -61,7 +61,7 @@ public class Server {
    * Main method to start the Moquette server.
    * @param args program arguments.
    * @throws IOException throws an IOException when we are unable to start the server
-   *and initialize resources.
+   *     and initialize resources.
    */
   public static void main(String[] args) throws IOException {
     final Server server = new Server();
@@ -105,7 +105,7 @@ public class Server {
   /**
    * Starts the server with the given properties.
    *
-   * <p> Its suggested to at least have the following properties:
+   * <p>Its suggested to at least have the following properties:
    * <ul>
    *  <li>port</li>
    *  <li>password_file</li>

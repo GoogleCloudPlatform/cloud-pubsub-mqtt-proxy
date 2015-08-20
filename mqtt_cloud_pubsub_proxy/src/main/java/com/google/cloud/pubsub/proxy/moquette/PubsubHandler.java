@@ -18,6 +18,7 @@ package com.google.cloud.pubsub.proxy.moquette;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+import static org.eclipse.moquette.proto.messages.AbstractMessage.DISCONNECT;
 import static org.eclipse.moquette.proto.messages.AbstractMessage.PUBLISH;
 import static org.eclipse.moquette.proto.messages.AbstractMessage.SUBSCRIBE;
 import static org.eclipse.moquette.proto.messages.AbstractMessage.UNSUBSCRIBE;
@@ -73,7 +74,7 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
     // process the mqtt message using Pubsub provider
     AbstractMessage mqttMsg = (AbstractMessage) msg;
     String clientId = (String) NettyUtils.getAttribute(ctx, NettyChannel.ATTR_KEY_CLIENTID);
-    // performing cloud pub/sub operations before mqtt operation,
+    // performing cloud pub/sub publish and subscribe operations before mqtt operation,
     // so that we can use the SUBACK and PUBACK protocol
     // if cloud pub/sub procedures fail, we will not send an ACK,
     // and the MQTT control packet gets resent
@@ -87,15 +88,23 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
           logger.info("Processing MQTT Subscribe Control Packet");
           handleSubscribeMessage(mqttMsg, clientId);
           break;
-        case UNSUBSCRIBE:
-          logger.info("Processing MQTT Unsubscribe Control Packet");
-          handleUnsubscribeMessage(mqttMsg, clientId);
-          break;
         default:
           break;
       }
       // process the mqtt message using the original Moquette mqtt handler
       mqttHandler.channelRead(ctx, msg);
+      // process unsubscribe and disconnect control packets
+      switch (mqttMsg.getMessageType()) {
+        case UNSUBSCRIBE:
+          logger.info("Processing MQTT Unsubscribe Control Packet");
+          handleUnsubscribeMessage(mqttMsg, clientId);
+          break;
+        case DISCONNECT:
+          // TODO unsubscribe from all subscriptions for the specific client id
+          break;
+        default:
+          break;
+      }
     } catch (Exception e) {
       // the pubsub provider failed to properly process the message
       // or the mqtt handler failed. The message will be resent and processed again.
