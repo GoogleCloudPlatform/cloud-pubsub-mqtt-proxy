@@ -100,7 +100,8 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
           handleUnsubscribeMessage(mqttMsg, clientId);
           break;
         case DISCONNECT:
-          // TODO unsubscribe from all subscriptions for the specific client id
+          logger.info("Processing MQTT Disconnect Control Packet");
+          pubsub.disconnect(clientId);
           break;
         default:
           break;

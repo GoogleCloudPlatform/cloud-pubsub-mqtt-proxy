@@ -67,6 +67,14 @@ public interface PubSub {
   void unsubscribe(UnsubscribeMessage msg);
 
   /**
+   * Unsubscribes from all topics the specified client is subscribed to using the underlying
+   * Pub/Sub implementation.
+   *
+   * @param clientId the id of the disconnecting client.
+   */
+  void disconnect(String clientId);
+
+  /**
    * Relinquishes the pubsub resources. This method will be invoked when the proxy
    * no longer requires the pubsub instance.
    */
