@@ -121,6 +121,9 @@ public final class GcloudPubsub implements PubSub {
    * @throws IOException when the initialization of the Google Cloud Pub/Sub client fails.
    */
   public GcloudPubsub() throws IOException {
+    if (CLOUD_PUBSUB_PROJECT_NAME == null) {
+      throw new IllegalStateException("Please set the GCLOUD_PUBSUB_PROJECT_ID environment variable to your project id");
+    }
     try {
       serverName = InetAddress.getLocalHost().getCanonicalHostName();
     } catch (UnknownHostException e) {
@@ -145,6 +148,9 @@ public final class GcloudPubsub implements PubSub {
    * @param pubsub the Google Cloud Pub/Sub instance to use for Pub/Sub operations.
    */
   public GcloudPubsub(Pubsub pubsub) {
+    if (CLOUD_PUBSUB_PROJECT_NAME == null) {
+      throw new IllegalStateException("Please set the GCLOUD_PUBSUB_PROJECT_ID environment variable to your project id");
+    }
     try {
       serverName = InetAddress.getLocalHost().getCanonicalHostName();
     } catch (UnknownHostException e) {
