@@ -10,6 +10,9 @@ The current version of the proxy utilizes Google Cloud Pub/Sub as the backend Pu
 If you're planning on running multiple instances of the proxy for scalability,
 you must avoid running multiple instances on the same host.
 
+If you will be using Google Cloud Pub/Sub, you must set the GCLOUD_PUBSUB_MQTT_PROXY environment
+variable equal to your project ID.
+  
 ## Building from source
 
 Clone the repository and go into the source. Execute `mvn clean package`. The jar files will be
