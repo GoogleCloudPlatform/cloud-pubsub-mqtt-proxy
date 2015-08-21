@@ -95,12 +95,13 @@ public final class GcloudPubsub implements PubSub {
   private static final String HASH_PREFIX = "sha256-";
   private static final String PREFIX = "cps-";
   private static final String ASTERISK_URLENCODE_VALUE = "%2A";
+  // TODO set the project id similar to gcloud(Veneer) libraries
   private static final String GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE = "GCLOUD_PUBSUB_PROJECT_ID";
   private static final String CLOUD_PUBSUB_PROJECT_ID =
       System.getenv(GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE);
   private static final String GCLOUD_PUBSUB_PROJECT_ID_NOT_SET_ERROR =
-      "Please set the" + GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE
-      + "environment variable to be equal to your project id";
+      "Please set the " + GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE
+      + " environment variable to your project id";
   private static final String BASE_TOPIC = "projects/"
       + CLOUD_PUBSUB_PROJECT_ID + "/topics/";
   private static final String BASE_SUBSCRIPTION = "projects/"
