@@ -448,6 +448,19 @@ public final class GcloudPubsub implements PubSub {
   }
 
   @Override
+  public synchronized void disconnect(String clientId) {
+    Map<String, Set<String>> mqttTopicMap = clientIdSubscriptionMap.get(clientId);
+    if (mqttTopicMap != null) {
+      // create a new set, because it will get updated on unsubscribe
+      // note: once a client is disconnected, the only acceptable control packet is a connect
+      Set<String> mqttTopics = new HashSet<>(mqttTopicMap.keySet());
+      for (String mqttTopic : mqttTopics) {
+        updateOnUnsubscribe(clientId, mqttTopic);
+      }
+    }
+  }
+
+  @Override
   public void destroy() {
     pubsub = null;
     taskExecutor.shutdown();
