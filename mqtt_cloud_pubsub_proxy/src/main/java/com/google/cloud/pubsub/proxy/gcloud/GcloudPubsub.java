@@ -95,7 +95,6 @@ public final class GcloudPubsub implements PubSub {
   private static final String HASH_PREFIX = "sha256-";
   private static final String PREFIX = "cps-";
   private static final String ASTERISK_URLENCODE_VALUE = "%2A";
-  // TODO - read project name from config file
   private static final String CLOUD_PUBSUB_PROJECT_NAME = System.getenv("GCLOUD_PUBSUB_PROJECT_ID");
   private static final String BASE_TOPIC = "projects/"
       + CLOUD_PUBSUB_PROJECT_NAME + "/topics/";
