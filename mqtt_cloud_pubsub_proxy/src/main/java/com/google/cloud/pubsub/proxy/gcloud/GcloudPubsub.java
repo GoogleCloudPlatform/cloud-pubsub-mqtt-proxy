@@ -95,12 +95,17 @@ public final class GcloudPubsub implements PubSub {
   private static final String HASH_PREFIX = "sha256-";
   private static final String PREFIX = "cps-";
   private static final String ASTERISK_URLENCODE_VALUE = "%2A";
-  // TODO - read project name from config file
-  private static final String CLOUD_PUBSUB_PROJECT_NAME = "iot-cloud-pubsub";
+  // TODO auto detect the project id similar to gcloud(Veneer) libraries
+  private static final String GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE = "GCLOUD_PROJECT";
+  private static final String CLOUD_PUBSUB_PROJECT_ID =
+      System.getenv(GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE);
+  private static final String GCLOUD_PUBSUB_PROJECT_ID_NOT_SET_ERROR =
+      "Please set the " + GCLOUD_PUBSUB_PROJECT_ID_ENV_VARIABLE
+      + " environment variable to your project id";
   private static final String BASE_TOPIC = "projects/"
-      + CLOUD_PUBSUB_PROJECT_NAME + "/topics/";
+      + CLOUD_PUBSUB_PROJECT_ID + "/topics/";
   private static final String BASE_SUBSCRIPTION = "projects/"
-      + CLOUD_PUBSUB_PROJECT_NAME + "/subscriptions/";
+      + CLOUD_PUBSUB_PROJECT_ID + "/subscriptions/";
   private static final Logger logger = Logger.getLogger(GcloudPubsub.class.getName());
   private final ScheduledExecutorService taskExecutor = Executors.newScheduledThreadPool(THREADS);
   private final String serverName;
@@ -122,6 +127,9 @@ public final class GcloudPubsub implements PubSub {
    * @throws IOException when the initialization of the Google Cloud Pub/Sub client fails.
    */
   public GcloudPubsub() throws IOException {
+    if (CLOUD_PUBSUB_PROJECT_ID == null) {
+      throw new IllegalStateException(GCLOUD_PUBSUB_PROJECT_ID_NOT_SET_ERROR);
+    }
     try {
       serverName = InetAddress.getLocalHost().getCanonicalHostName();
     } catch (UnknownHostException e) {
@@ -146,6 +154,9 @@ public final class GcloudPubsub implements PubSub {
    * @param pubsub the Google Cloud Pub/Sub instance to use for Pub/Sub operations.
    */
   public GcloudPubsub(Pubsub pubsub) {
+    if (CLOUD_PUBSUB_PROJECT_ID == null) {
+      throw new IllegalStateException(GCLOUD_PUBSUB_PROJECT_ID_NOT_SET_ERROR);
+    }
     try {
       serverName = InetAddress.getLocalHost().getCanonicalHostName();
     } catch (UnknownHostException e) {
