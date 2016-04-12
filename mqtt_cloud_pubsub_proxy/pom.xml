@@ -26,8 +26,8 @@
   </organization>
   <repositories>
     <repository>
-        <id>Eclipse Paho Repo</id>
-        <url>https://repo.eclipse.org/content/repositories/paho-releases/</url>
+      <id>Eclipse Paho Repo</id>
+      <url>https://repo.eclipse.org/content/repositories/paho-releases/</url>
     </repository>
     <repository>
       <id>bintray</id>
@@ -99,6 +99,11 @@
           </execution>
         </executions>
         <configuration>
+          <archive>
+            <manifest>
+              <mainClass>com.google.cloud.pubsub.proxy.moquette.Server</mainClass>
+            </manifest>
+          </archive>
           <descriptorRefs>
             <descriptorRef>jar-with-dependencies</descriptorRef>
           </descriptorRefs>

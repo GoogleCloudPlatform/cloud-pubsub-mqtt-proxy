@@ -187,7 +187,7 @@ public final class GcloudPubsub implements PubSub {
     // create attributes for the message
     Map<String, String> attributes = ImmutableMap.of(MQTT_CLIENT_ID, msg.getMqttClientId(),
         MQTT_TOPIC_NAME, msg.getMqttTopic(),
-        MQTT_MESSAGE_ID, msg.getMqttMessageId().toString(),
+        MQTT_MESSAGE_ID, msg.getMqttMessageId() == null ? "" : msg.getMqttMessageId().toString(),
         MQTT_RETAIN, msg.isMqttMessageRetained().toString(),
         PROXY_SERVER_ID, serverName);
     pubsubMessage.setAttributes(attributes);
