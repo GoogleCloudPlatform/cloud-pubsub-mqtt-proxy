@@ -41,6 +41,7 @@ import org.eclipse.moquette.spi.IMessaging;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -109,8 +110,7 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
     } catch (Exception e) {
       // the pubsub provider failed to properly process the message
       // or the mqtt handler failed. The message will be resent and processed again.
-      logger.info("An error occured while attempting to process the MQTT message.\n"
-          + e.getMessage());
+      logger.log(Level.SEVERE, "An error occured while attempting to process the MQTT message.", e);
     }
   }
 
