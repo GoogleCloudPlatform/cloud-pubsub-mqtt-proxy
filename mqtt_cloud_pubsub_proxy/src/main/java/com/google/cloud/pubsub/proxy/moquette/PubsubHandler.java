@@ -58,7 +58,8 @@ public class PubsubHandler extends ChannelInboundHandlerAdapter {
   /**
    * Initializes this handler and sets the MQTT handler.
    *
-   * @param handler the MQTT handler instance.
+   * @param mqttHandler the MQTT handler instance.
+   * @param pubsub the Google PubSub Client instance.
    */
   public PubsubHandler(PubSub pubsub, NettyMQTTHandler mqttHandler) {
     this.mqttHandler = checkNotNull(mqttHandler);

@@ -180,7 +180,7 @@ public final class GcloudPubsub implements PubSub {
    */
   @Override
   public void publish(PublishMessage msg) throws IOException {
-    String publishTopic = createFullGcloudPubsubTopic(createPubSubTopic(msg.getMqttTopic()));
+    String publishTopic = createFullGcloudPubsubTopic(msg.getMqttTopic());
     PubsubMessage pubsubMessage = new PubsubMessage();
     byte[] payload = convertMqttPayloadToGcloudPayload(msg.getMqttPaylaod());
     pubsubMessage.setData(new String(payload));
@@ -223,8 +223,8 @@ public final class GcloudPubsub implements PubSub {
     logger.info("*******CLIENT ID : " + clientId);
     // TODO support wildcard subscriptions
     String cpsSubscriptionName =
-        createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic, clientId));
-    String cpsSubscriptionTopic = createFullGcloudPubsubTopic(createPubSubTopic(mqttTopic));
+        createFullGcloudPubsubSubscription(createSubscriptionName(mqttTopic, clientId));
+    String cpsSubscriptionTopic = createFullGcloudPubsubTopic(mqttTopic);
     updateOnSubscribe(clientId, mqttTopic, cpsSubscriptionName, cpsSubscriptionTopic);
     logger.info("Cloud PubSub subscribe SUCCESS for topic " + cpsSubscriptionTopic);
   }
@@ -274,7 +274,7 @@ public final class GcloudPubsub implements PubSub {
           clientIds.remove(clientId);
           if (clientIds.isEmpty()) {
             String subscriptionName =
-                createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic, clientId));
+                createFullGcloudPubsubSubscription(createSubscriptionName(mqttTopic, clientId));
             activeSubscriptions.remove(subscriptionName);
             cpsSubscriptionMap.remove(pubsubTopic);
           }
@@ -371,52 +371,21 @@ public final class GcloudPubsub implements PubSub {
   }
 
   /**
-   * Returns the qualified Google Cloud Pub/Sub topic name for the given MQTT topic by
-   * URL encoding and further transforming the MQTT topic name.
-   *
-   * @param mqttTopic the MQTT topic name.
-   * @return the Google Cloud Pub/Sub topic name.
-   */
-  private String createPubSubTopic(String mqttTopic) {
-    // Google Cloud Pub/Sub resource name requirements can be found at https://cloud.google.com/pubsub/overview
-    // Adding a prefix to ensure topic name meets minimum length requirement and prevents the
-    // topic name from starting with "goog"
-    String topic = PREFIX + getEncodedTopicName(mqttTopic);
-    // URLEncode to support using special characters in the topic name
-    // hash the topic name(sha256 -- 64 character hash) if it exceeds the max length
-    if (topic.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
-      topic = HASH_PREFIX + getHashedName(topic);
-    }
-    return topic;
-  }
-
-  /**
    * Return the qualified Google Cloud Pub/Sub subscription name for the given MQTT topic.
    *
    * @param mqttTopic the mqtt topic name for this subscription.
-   * @param clientId
+   * @param clientId client id unique to user/device
    * @return the Google Cloud Pub/Sub subscription name that will be used for this topic.
    */
-  private String createSubcriptionName(String mqttTopic, String clientId) {
-    // create subscription name using the format: PREFIX+clientId+CP/S-topic-equivalent
-    String subscriptionName = PREFIX + clientId + getEncodedTopicName(mqttTopic);
+  private String createSubscriptionName(String mqttTopic, String clientId) {
+    // create subscription name using the format: topic-clientId
+    String subscriptionName = mqttTopic + "-" + clientId;
     logger.info("Got client Id" + clientId);
     // if the subscription name exceeds the max length required by pubsub, hash the name
     if (subscriptionName.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
       subscriptionName = HASH_PREFIX + getHashedName(subscriptionName);
     }
     return subscriptionName;
-  }
-
-  private String getEncodedTopicName(String topic) {
-    try {
-      topic = URLEncoder.encode(topic, StandardCharsets.UTF_8.name());
-    } catch (UnsupportedEncodingException e) {
-      throw new IllegalStateException("Unable to URL encode the mqtt topic name using "
-          + StandardCharsets.UTF_8.name());
-    }
-    topic = topic.replace("*", ASTERISK_URLENCODE_VALUE);
-    return topic;
   }
 
   private String getHashedName(String topic) {
