@@ -379,7 +379,7 @@ public final class GcloudPubsub implements PubSub {
    */
   private String createSubscriptionName(String mqttTopic, String clientId) {
     // create subscription name using the format: topic-clientId
-    String subscriptionName = mqttTopic + "-" + clientId;
+    String subscriptionName = clientId + "-" + mqttTopic;
     logger.info("Got client Id" + clientId);
     // if the subscription name exceeds the max length required by pubsub, hash the name
     if (subscriptionName.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
