@@ -220,9 +220,10 @@ public final class GcloudPubsub implements PubSub {
   public void subscribe(SubscribeMessage msg) throws IOException {
     String mqttTopic = msg.getMqttTopic();
     String clientId = msg.getClientId();
+    logger.info("*******CLIENT ID : " + clientId);
     // TODO support wildcard subscriptions
     String cpsSubscriptionName =
-        createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic));
+        createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic, clientId));
     String cpsSubscriptionTopic = createFullGcloudPubsubTopic(createPubSubTopic(mqttTopic));
     updateOnSubscribe(clientId, mqttTopic, cpsSubscriptionName, cpsSubscriptionTopic);
     logger.info("Cloud PubSub subscribe SUCCESS for topic " + cpsSubscriptionTopic);
@@ -273,7 +274,7 @@ public final class GcloudPubsub implements PubSub {
           clientIds.remove(clientId);
           if (clientIds.isEmpty()) {
             String subscriptionName =
-                createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic));
+                createFullGcloudPubsubSubscription(createSubcriptionName(mqttTopic, clientId));
             activeSubscriptions.remove(subscriptionName);
             cpsSubscriptionMap.remove(pubsubTopic);
           }
@@ -393,11 +394,13 @@ public final class GcloudPubsub implements PubSub {
    * Return the qualified Google Cloud Pub/Sub subscription name for the given MQTT topic.
    *
    * @param mqttTopic the mqtt topic name for this subscription.
+   * @param clientId
    * @return the Google Cloud Pub/Sub subscription name that will be used for this topic.
    */
-  private String createSubcriptionName(String mqttTopic) {
-    // create subscription name using the format: PREFIX+servername+CP/S-topic-equivalent
-    String subscriptionName = PREFIX + serverName + getEncodedTopicName(mqttTopic);
+  private String createSubcriptionName(String mqttTopic, String clientId) {
+    // create subscription name using the format: PREFIX+clientId+CP/S-topic-equivalent
+    String subscriptionName = PREFIX + clientId + getEncodedTopicName(mqttTopic);
+    logger.info("Got client Id" + clientId);
     // if the subscription name exceeds the max length required by pubsub, hash the name
     if (subscriptionName.length() > MAXIMUM_CPS_TOPIC_LENGTH) {
       subscriptionName = HASH_PREFIX + getHashedName(subscriptionName);
