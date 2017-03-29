@@ -114,10 +114,6 @@ final class GcloudPullMessageTask implements Callable<Void> {
 
   @Override
   public Void call() {
-    if (gcloud.shouldTerminateSubscription(subscriptionName)) {
-      logger.info("Terminating Pull Task for subscription: " + subscriptionName);
-      return null;
-    }
     int pullDelayTime;
     List<ReceivedMessage> msgs = null;
     try {
