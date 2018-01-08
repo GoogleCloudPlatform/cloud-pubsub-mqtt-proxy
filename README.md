@@ -1,3 +1,7 @@
+DEPRECATED
+
+Google provides [MQTT bridge](https://cloud.google.com/iot/docs/how-tos/mqtt-bridge) as part of our Cloud IoT offerings. We recommend that you consider using the MQTT bridge.
+
 ## What is MQTT Cloud Pub/Sub Proxy?
 
 The MQTT Cloud Pub/Sub proxy provides a solution for utilizing Cloud Pub/Sub with IoT client
